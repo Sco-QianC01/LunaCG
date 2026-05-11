@@ -9,6 +9,10 @@ permissions:
   contents: write
   pull-requests: write
 
+concurrency:
+  group: upstream-sync-${{ github.ref }}
+  cancel-in-progress: false
+
 env:
   UPSTREAM_REPOSITORY: hafrey1/LunaTV-config
   TARGET_BRANCH: main
@@ -39,18 +43,50 @@ jobs:
           git push origin "${TARGET_BRANCH}"
 
       - name: Prepare sync branch when fast-forward is not possible
+        id: prepare
         if: steps.ff.outcome == 'failure'
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git checkout -B "${SYNC_BRANCH}" "origin/${TARGET_BRANCH}"
+          set +e
           git merge --no-edit "upstream/${TARGET_BRANCH}"
+          merge_status=$?
+          set -e
+          if [ "${merge_status}" -ne 0 ]; then
+            git diff --name-only --diff-filter=U > upstream-sync-conflicts.txt
+            {
+              echo "conflict=true"
+              echo "conflict_files<<EOF"
+              cat upstream-sync-conflicts.txt
+              echo "EOF"
+            } >> "${GITHUB_OUTPUT}"
+            git merge --abort || true
+            exit 0
+          fi
+          echo "conflict=false" >> "${GITHUB_OUTPUT}"
           git push --force-with-lease origin "${SYNC_BRANCH}"
 
       - name: Open or update sync pull request
-        if: steps.ff.outcome == 'failure'
+        if: steps.ff.outcome == 'failure' && steps.prepare.outputs.conflict != 'true'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           gh pr create --base "${TARGET_BRANCH}" --head "${SYNC_BRANCH}" --title "Sync upstream ${UPSTREAM_REPOSITORY}" --body "Automated upstream sync. Review this PR because the fork cannot be fast-forwarded safely." || \
           gh pr edit "${SYNC_BRANCH}" --title "Sync upstream ${UPSTREAM_REPOSITORY}" --body "Automated upstream sync. Review this PR because the fork cannot be fast-forwarded safely."
+
+      - name: Report upstream merge conflicts without failing
+        if: steps.ff.outcome == 'failure' && steps.prepare.outputs.conflict == 'true'
+        run: |
+          {
+            echo "## Upstream sync needs manual conflict resolution"
+            echo
+            echo "Fast-forward was not possible, and an automatic merge also conflicted."
+            echo
+            echo "Conflicting files:"
+            while IFS= read -r file; do
+              [ -n "${file}" ] && echo "- \`${file}\`"
+            done <<< "${{ steps.prepare.outputs.conflict_files }}"
+            echo
+            echo "The workflow is marked successful to avoid repeated failure emails."
+          } >> "${GITHUB_STEP_SUMMARY}"
