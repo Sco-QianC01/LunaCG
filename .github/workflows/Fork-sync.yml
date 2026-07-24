@@ -15,6 +15,7 @@ concurrency:
 env:
   TARGET_BRANCH: main
   UPSTREAM_REPOSITORY: hafrey1/LunaTV-config
+  AUTO_RESOLVE_OURS: README.md report.md
 
 jobs:
   sync:
@@ -57,16 +58,35 @@ jobs:
               pushed=1
               echo "Merged upstream ${UPSTREAM_REPOSITORY}:${TARGET_BRANCH}." >> "$GITHUB_STEP_SUMMARY"
             else
-              echo "Upstream sync has conflicts and was left unchanged." >> "$GITHUB_STEP_SUMMARY"
-              echo "Conflicted files:" >> "$GITHUB_STEP_SUMMARY"
-              git diff --name-only --diff-filter=U | sed 's/^/- /' >> "$GITHUB_STEP_SUMMARY" || true
-              git merge --abort || true
-              exit 1
+              mapfile -t conflicted < <(git diff --name-only --diff-filter=U)
+              can_auto_resolve=1
+              for file in "${conflicted[@]}"; do
+                case " $AUTO_RESOLVE_OURS " in
+                  *" $file "*) ;;
+                  *) can_auto_resolve=0 ;;
+                esac
+              done
+
+              if [[ "${#conflicted[@]}" -gt 0 && "$can_auto_resolve" == "1" ]]; then
+                git checkout --ours -- "${conflicted[@]}"
+                git add "${conflicted[@]}"
+                git commit -m "chore: merge upstream preserving local generated reports"
+                git push origin "${TARGET_BRANCH}"
+                pushed=1
+                echo "Merged upstream and preserved local generated report files:" >> "$GITHUB_STEP_SUMMARY"
+                printf -- '- %s
+' "${conflicted[@]}" >> "$GITHUB_STEP_SUMMARY"
+              else
+                echo "Upstream sync has conflicts and was left unchanged." >> "$GITHUB_STEP_SUMMARY"
+                echo "Conflicted files:" >> "$GITHUB_STEP_SUMMARY"
+                printf -- '- %s
+' "${conflicted[@]}" >> "$GITHUB_STEP_SUMMARY" || true
+                git merge --abort || true
+                exit 1
+              fi
             fi
           fi
 
-          # GitHub disables scheduled workflows in inactive public repositories.
-          # If no upstream change was pushed for a long time, create a tiny keepalive commit.
           if [[ "$pushed" == "0" ]]; then
             last_commit_ts=$(git log -1 --format=%ct "origin/${TARGET_BRANCH}")
             now_ts=$(date -u +%s)
