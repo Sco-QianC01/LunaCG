@@ -15,7 +15,7 @@ concurrency:
 env:
   TARGET_BRANCH: main
   UPSTREAM_REPOSITORY: hafrey1/LunaTV-config
-  AUTO_RESOLVE_OURS: README.md report.md
+  AUTO_RESOLVE_OURS: "README.md report.md"
 
 jobs:
   sync:
@@ -74,13 +74,15 @@ jobs:
                 git push origin "${TARGET_BRANCH}"
                 pushed=1
                 echo "Merged upstream and preserved local generated report files:" >> "$GITHUB_STEP_SUMMARY"
-                printf -- '- %s
-' "${conflicted[@]}" >> "$GITHUB_STEP_SUMMARY"
+                for file in "${conflicted[@]}"; do
+                  echo "- $file" >> "$GITHUB_STEP_SUMMARY"
+                done
               else
                 echo "Upstream sync has conflicts and was left unchanged." >> "$GITHUB_STEP_SUMMARY"
                 echo "Conflicted files:" >> "$GITHUB_STEP_SUMMARY"
-                printf -- '- %s
-' "${conflicted[@]}" >> "$GITHUB_STEP_SUMMARY" || true
+                for file in "${conflicted[@]}"; do
+                  echo "- $file" >> "$GITHUB_STEP_SUMMARY"
+                done
                 git merge --abort || true
                 exit 1
               fi
